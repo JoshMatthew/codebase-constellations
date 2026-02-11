@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Code Visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      overflow: hidden;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      position: fixed;
+      top: 0; left: 0;
+    }
+
+    /* Top bar */
+    #top-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 48px;
+      background: rgba(15, 15, 25, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      z-index: 100;
+      gap: 12px;
+    }
+    #top-bar h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #8b5cf6;
+      letter-spacing: 0.5px;
+    }
+    #top-bar .stats {
+      font-size: 11px;
+      color: #666;
+      margin-left: auto;
+    }
+
+    /* Path input */
+    #path-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #path-input {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 10px;
+      width: 320px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #path-input:focus { border-color: #8b5cf6; }
+    #analyze-btn {
+      background: #8b5cf6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #analyze-btn:hover { background: #7c3aed; }
+    #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Sidebar filters */
+    #sidebar {
+      position: fixed;
+      top: 48px; left: 0;
+      width: 240px;
+      height: calc(100vh - 48px);
+      background: rgba(15, 15, 25, 0.85);
+      backdrop-filter: blur(12px);
+      border-right: 1px solid rgba(255,255,255,0.06);
+      padding: 12px;
+      z-index: 90;
+      overflow-y: auto;
+      transform: translateX(0);
+      transition: transform 0.3s;
+      font-size: 12px;
+    }
+    #sidebar.collapsed { transform: translateX(-240px); }
+    #sidebar h3 {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #666;
+      margin: 12px 0 6px;
+    }
+    #sidebar h3:first-child { margin-top: 0; }
+    .filter-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 0;
+      cursor: pointer;
+      color: #999;
+      transition: color 0.15s;
+    }
+    .filter-item:hover { color: #e0e0e0; }
+    .filter-item input[type="checkbox"] {
+      accent-color: #8b5cf6;
+    }
+    .filter-item .count {
+      margin-left: auto;
+      font-size: 10px;
+      color: #444;
+    }
+    #sidebar-toggle {
+      position: fixed;
+      top: 56px; left: 4px;
+      z-index: 95;
+      background: rgba(15,15,25,0.9);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      color: #888;
+      font-size: 16px;
+      width: 24px; height: 24px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: left 0.3s;
+    }
+    #sidebar-toggle.open { left: 244px; }
+
+    /* Slider */
+    .slider-group { margin: 8px 0; }
+    .slider-group label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+    .slider-group input[type="range"] {
+      width: 100%;
+      accent-color: #8b5cf6;
+    }
+
+    /* Tooltip */
+    #tooltip {
+      position: fixed;
+      pointer-events: none;
+      background: rgba(15, 15, 25, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      z-index: 200;
+      display: none;
+      max-width: 320px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    #tooltip .tt-file {
+      font-weight: 600;
+      color: #8b5cf6;
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+    #tooltip .tt-meta {
+      color: #666;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+    #tooltip .tt-exports {
+      color: #a5b4fc;
+      font-size: 11px;
+    }
+    #tooltip .tt-exports span {
+      display: inline-block;
+      background: rgba(139,92,246,0.15);
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin: 2px 2px 0 0;
+    }
+
+    /* Loading */
+    #loading {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      z-index: 300;
+    }
+    #loading .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(139,92,246,0.2);
+      border-top-color: #8b5cf6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { color: #666; font-size: 13px; }
+
+    /* 2D/3D toggle */
+    .view-toggle {
+      display: flex;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .view-toggle button {
+      background: none;
+      border: none;
+      color: #666;
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .view-toggle button.active {
+      background: #8b5cf6;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="top-bar">
+    <h1>CODE VISUALIZER</h1>
+    <form id="path-form">
+      <input id="path-input" type="text" placeholder="Enter codebase path..." />
+      <button id="analyze-btn" type="submit">Analyze</button>
+    </form>
+    <div class="view-toggle">
+      <button id="btn-3d" class="active">3D</button>
+      <button id="btn-2d">2D</button>
+    </div>
+    <span class="stats" id="stats"></span>
+  </div>
+
+  <button id="sidebar-toggle" class="open">◀</button>
+  <div id="sidebar">
+    <h3>Folders</h3>
+    <div id="folder-filters"></div>
+    <h3>File Types</h3>
+    <div id="ext-filters"></div>
+    <h3>Highlight Refs</h3>
+    <div class="slider-group">
+      <label><span>Min refs to show</span><span id="ref-val">0</span></label>
+      <input type="range" id="ref-slider" min="0" max="20" value="0" />
+    </div>
+    <h3>Link Strength</h3>
+    <div class="slider-group">
+      <label><span>Min weight</span><span id="weight-val">0</span></label>
+      <input type="range" id="weight-slider" min="0" max="10" value="0" />
+    </div>
+  </div>
+
+  <div id="tooltip">
+    <div class="tt-file"></div>
+    <div class="tt-meta"></div>
+    <div class="tt-exports"></div>
+  </div>
+
+  <div id="loading" style="display:none">
+    <div class="spinner"></div>
+    <p>Analyzing codebase...</p>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
