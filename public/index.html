@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Code Visualizer</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -11,20 +12,15 @@
       color: #e0e0e0;
       font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
       overflow: hidden;
-    }
-    #canvas-container {
-      width: 100vw;
       height: 100vh;
-      position: fixed;
-      top: 0; left: 0;
     }
 
-    /* Top bar */
+    /* ── Top bar ── */
     #top-bar {
       position: fixed;
       top: 0; left: 0; right: 0;
       height: 48px;
-      background: rgba(15, 15, 25, 0.9);
+      background: rgba(15, 15, 25, 0.95);
       backdrop-filter: blur(12px);
       border-bottom: 1px solid rgba(255,255,255,0.06);
       display: flex;
@@ -38,47 +34,231 @@
       font-weight: 600;
       color: #8b5cf6;
       letter-spacing: 0.5px;
-    }
-    #top-bar .stats {
-      font-size: 11px;
-      color: #666;
-      margin-left: auto;
+      white-space: nowrap;
     }
 
-    /* Path input */
-    #path-form {
-      display: flex;
-      gap: 8px;
-      align-items: center;
+    /* Search */
+    #search-container {
+      position: relative;
+      flex: 1;
+      max-width: 420px;
     }
-    #path-input {
+    #search-input {
+      width: 100%;
       background: rgba(255,255,255,0.05);
       border: 1px solid rgba(255,255,255,0.1);
       border-radius: 6px;
       color: #e0e0e0;
       font-family: inherit;
       font-size: 12px;
-      padding: 6px 10px;
-      width: 320px;
+      padding: 6px 10px 6px 30px;
       outline: none;
       transition: border-color 0.2s;
     }
-    #path-input:focus { border-color: #8b5cf6; }
-    #analyze-btn {
+    #search-input:focus { border-color: #8b5cf6; }
+    #search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #555;
+      font-size: 12px;
+      pointer-events: none;
+    }
+    #search-results {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: rgba(15, 15, 25, 0.98);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 0 0 6px 6px;
+      max-height: 320px;
+      overflow-y: auto;
+      z-index: 200;
+    }
+    .search-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .search-item:hover, .search-item.active { background: rgba(139, 92, 246, 0.15); }
+    .search-item .sym-type {
+      font-size: 9px;
+      text-transform: uppercase;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .search-item .sym-name { font-size: 12px; color: #e0e0e0; }
+    .search-item .sym-file { font-size: 10px; color: #555; margin-left: auto; }
+
+    /* View toggle */
+    .view-toggle {
+      display: flex;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.1);
+      flex-shrink: 0;
+    }
+    .view-toggle button {
+      background: none;
+      border: none;
+      color: #666;
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .view-toggle button.active {
       background: #8b5cf6;
       color: white;
-      border: none;
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: background 0.2s;
     }
-    #analyze-btn:hover { background: #7c3aed; }
-    #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* Sidebar filters */
+    #stats {
+      font-size: 11px;
+      color: #666;
+      white-space: nowrap;
+    }
+
+    /* ── Breadcrumbs ── */
+    #breadcrumbs {
+      position: fixed;
+      top: 48px; left: 0; right: 0;
+      height: 32px;
+      background: rgba(15, 15, 25, 0.9);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      z-index: 90;
+      font-size: 11px;
+      gap: 4px;
+      color: #555;
+    }
+    .breadcrumb-item {
+      cursor: pointer;
+      color: #888;
+      transition: color 0.15s;
+    }
+    .breadcrumb-item:hover { color: #8b5cf6; }
+    .breadcrumb-item.current { color: #e0e0e0; font-weight: 600; }
+    .breadcrumb-sep { color: #333; }
+
+    /* ── Explorer layout ── */
+    #explorer-view {
+      position: fixed;
+      top: 80px; left: 0; right: 0; bottom: 0;
+      display: flex;
+    }
+
+    #graph-panel {
+      width: 45%;
+      min-width: 300px;
+      height: 100%;
+      position: relative;
+      border-right: 1px solid rgba(255,255,255,0.06);
+    }
+    #graph-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #graph-empty {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: #444;
+      font-size: 13px;
+    }
+    #graph-empty p { margin-bottom: 6px; }
+
+    #code-panel {
+      flex: 1;
+      height: 100%;
+      overflow-y: auto;
+      background: #0d1117;
+      position: relative;
+    }
+    #code-header {
+      position: sticky;
+      top: 0;
+      background: rgba(13, 17, 23, 0.95);
+      backdrop-filter: blur(8px);
+      padding: 8px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 12px;
+      color: #8b5cf6;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #code-header .line-info { color: #555; margin-left: auto; }
+    #code-content {
+      padding: 0;
+    }
+    #code-content pre {
+      margin: 0;
+      padding: 12px 0;
+      background: transparent !important;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    #code-content code {
+      background: transparent !important;
+    }
+    .code-line {
+      display: block;
+      padding: 0 16px 0 52px;
+      position: relative;
+      min-height: 19.2px;
+    }
+    .code-line .line-num {
+      position: absolute;
+      left: 0;
+      width: 44px;
+      text-align: right;
+      color: #333;
+      font-size: 11px;
+      user-select: none;
+      padding-right: 12px;
+    }
+    .code-line.highlighted {
+      background: rgba(139, 92, 246, 0.08);
+    }
+    .code-line.highlighted .line-num {
+      color: #8b5cf6;
+    }
+    #code-empty {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: #444;
+      font-size: 13px;
+    }
+
+    /* ── Galaxy map (3D) ── */
+    #galaxy-view {
+      display: none;
+      position: fixed;
+      top: 48px; left: 0; right: 0; bottom: 0;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Galaxy sidebar */
     #sidebar {
       position: fixed;
       top: 48px; left: 0;
@@ -90,11 +270,12 @@
       padding: 12px;
       z-index: 90;
       overflow-y: auto;
-      transform: translateX(0);
+      transform: translateX(-240px);
       transition: transform 0.3s;
       font-size: 12px;
+      display: none;
     }
-    #sidebar.collapsed { transform: translateX(-240px); }
+    #sidebar.open { transform: translateX(0); }
     #sidebar h3 {
       font-size: 10px;
       text-transform: uppercase;
@@ -113,14 +294,17 @@
       transition: color 0.15s;
     }
     .filter-item:hover { color: #e0e0e0; }
-    .filter-item input[type="checkbox"] {
-      accent-color: #8b5cf6;
+    .filter-item input[type="checkbox"] { accent-color: #8b5cf6; }
+    .filter-item .count { margin-left: auto; font-size: 10px; color: #444; }
+    .slider-group { margin: 8px 0; }
+    .slider-group label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
     }
-    .filter-item .count {
-      margin-left: auto;
-      font-size: 10px;
-      color: #444;
-    }
+    .slider-group input[type="range"] { width: 100%; accent-color: #8b5cf6; }
     #sidebar-toggle {
       position: fixed;
       top: 56px; left: 4px;
@@ -132,28 +316,14 @@
       font-size: 16px;
       width: 24px; height: 24px;
       cursor: pointer;
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
       transition: left 0.3s;
     }
     #sidebar-toggle.open { left: 244px; }
 
-    /* Slider */
-    .slider-group { margin: 8px 0; }
-    .slider-group label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      color: #888;
-      margin-bottom: 4px;
-    }
-    .slider-group input[type="range"] {
-      width: 100%;
-      accent-color: #8b5cf6;
-    }
-
-    /* Tooltip */
+    /* Tooltip (galaxy) */
     #tooltip {
       position: fixed;
       pointer-events: none;
@@ -168,21 +338,9 @@
       max-width: 320px;
       box-shadow: 0 8px 32px rgba(0,0,0,0.5);
     }
-    #tooltip .tt-file {
-      font-weight: 600;
-      color: #8b5cf6;
-      margin-bottom: 4px;
-      word-break: break-all;
-    }
-    #tooltip .tt-meta {
-      color: #666;
-      font-size: 11px;
-      margin-bottom: 6px;
-    }
-    #tooltip .tt-exports {
-      color: #a5b4fc;
-      font-size: 11px;
-    }
+    #tooltip .tt-file { font-weight: 600; color: #8b5cf6; margin-bottom: 4px; word-break: break-all; }
+    #tooltip .tt-meta { color: #666; font-size: 11px; margin-bottom: 6px; }
+    #tooltip .tt-exports { color: #a5b4fc; font-size: 11px; }
     #tooltip .tt-exports span {
       display: inline-block;
       background: rgba(139,92,246,0.15);
@@ -210,47 +368,117 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     #loading p { color: #666; font-size: 13px; }
 
-    /* 2D/3D toggle */
-    .view-toggle {
-      display: flex;
+    /* Symbol type colors */
+    .type-function { background: rgba(6, 182, 212, 0.2); color: #06b6d4; }
+    .type-class { background: rgba(139, 92, 246, 0.2); color: #8b5cf6; }
+    .type-variable { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .type-method { background: rgba(99, 102, 241, 0.2); color: #6366f1; }
+    .type-type, .type-interface { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+    .type-enum { background: rgba(236, 72, 153, 0.2); color: #ec4899; }
+
+    /* Resize handle */
+    #resize-handle {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      position: absolute;
+      right: -2px;
+      top: 0;
+      bottom: 0;
+      z-index: 10;
+      transition: background 0.2s;
+    }
+    #resize-handle:hover { background: rgba(139, 92, 246, 0.3); }
+
+    /* Path input (galaxy mode reuse) */
+    #path-form {
+      display: none;
+      gap: 8px;
+      align-items: center;
+    }
+    #path-input {
       background: rgba(255,255,255,0.05);
-      border-radius: 6px;
-      overflow: hidden;
       border: 1px solid rgba(255,255,255,0.1);
-    }
-    .view-toggle button {
-      background: none;
-      border: none;
-      color: #666;
+      border-radius: 6px;
+      color: #e0e0e0;
       font-family: inherit;
-      font-size: 11px;
-      padding: 4px 10px;
-      cursor: pointer;
-      transition: all 0.2s;
+      font-size: 12px;
+      padding: 6px 10px;
+      width: 320px;
+      outline: none;
     }
-    .view-toggle button.active {
+    #path-input:focus { border-color: #8b5cf6; }
+    #analyze-btn {
       background: #8b5cf6;
       color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
     }
+    #analyze-btn:hover { background: #7c3aed; }
+    #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
   </style>
 </head>
 <body>
-  <div id="canvas-container"></div>
-
+  <!-- Top bar -->
   <div id="top-bar">
     <h1>CODE VISUALIZER</h1>
+    <div id="search-container">
+      <span id="search-icon">&#x1F50D;</span>
+      <input id="search-input" type="text" placeholder="Search symbols..." autocomplete="off" />
+      <div id="search-results"></div>
+    </div>
     <form id="path-form">
       <input id="path-input" type="text" placeholder="Enter codebase path..." />
       <button id="analyze-btn" type="submit">Analyze</button>
     </form>
     <div class="view-toggle">
-      <button id="btn-3d" class="active">3D</button>
-      <button id="btn-2d">2D</button>
+      <button id="btn-explorer" class="active">Explorer</button>
+      <button id="btn-galaxy">Galaxy Map</button>
     </div>
     <span class="stats" id="stats"></span>
   </div>
 
-  <button id="sidebar-toggle" class="open">◀</button>
+  <!-- Breadcrumbs -->
+  <div id="breadcrumbs"></div>
+
+  <!-- Explorer view (default) -->
+  <div id="explorer-view">
+    <div id="graph-panel">
+      <canvas id="graph-canvas"></canvas>
+      <div id="graph-empty">
+        <p>Search for a symbol or wait for analysis...</p>
+      </div>
+      <div id="resize-handle"></div>
+    </div>
+    <div id="code-panel">
+      <div id="code-header" style="display:none">
+        <span id="code-file-name"></span>
+        <span class="line-info" id="code-line-info"></span>
+      </div>
+      <div id="code-content"></div>
+      <div id="code-empty">
+        <p>Select a symbol to view its source code</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Galaxy map view -->
+  <div id="galaxy-view">
+    <div id="canvas-container"></div>
+  </div>
+
+  <!-- Galaxy sidebar -->
+  <button id="sidebar-toggle">&#x25C0;</button>
   <div id="sidebar">
     <h3>Folders</h3>
     <div id="folder-filters"></div>
@@ -279,6 +507,10 @@
     <p>Analyzing codebase...</p>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+
   <script type="importmap">
   {
     "imports": {
@@ -287,6 +519,6 @@
     }
   }
   </script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="explorer.js"></script>
 </body>
 </html>
