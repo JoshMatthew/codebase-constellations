@@ -445,7 +445,56 @@ async function analyzeCodebase(rootDir) {
   return { nodes, edges, folders, extensions };
 }
 
-function extractSymbols(ast, filePath, relFile) {
+function conditionToString(node, sourceCode) {
+  if (sourceCode && node.start != null && node.end != null) {
+    // Extract just the first line of the condition, clean up whitespace
+    let text = sourceCode.slice(node.start, node.end);
+    text = text.replace(/\s+/g, " ").trim();
+    if (text.length > 40) text = text.slice(0, 37) + "...";
+    return text;
+  }
+  return null;
+}
+
+function getEnclosingConditions(nodePath, sourceCode) {
+  // Only return the INNERMOST condition (most specific/relevant)
+  let scope = nodePath.parentPath;
+  while (scope) {
+    if (scope.node.type === "IfStatement") {
+      const condText = conditionToString(scope.node.test, sourceCode);
+      if (condText) {
+        const callStart = nodePath.node.start;
+        const callEnd = nodePath.node.end;
+        const alt = scope.node.alternate;
+        let branch = "if";
+        if (alt && callStart >= alt.start && callEnd <= alt.end) {
+          branch = "else";
+        }
+        return [{ condition: condText, branch }];
+      }
+    } else if (scope.node.type === "ConditionalExpression") {
+      const condText = conditionToString(scope.node.test, sourceCode);
+      if (condText) {
+        const callStart = nodePath.node.start;
+        const alt = scope.node.alternate;
+        let branch = "?";
+        if (alt && callStart >= alt.start) branch = ":";
+        return [{ condition: condText, branch }];
+      }
+    }
+    // Stop at function boundaries
+    if (
+      scope.node.type === "FunctionDeclaration" ||
+      scope.node.type === "ArrowFunctionExpression" ||
+      scope.node.type === "FunctionExpression" ||
+      scope.node.type === "ClassMethod"
+    ) break;
+    scope = scope.parentPath;
+  }
+  return [];
+}
+
+function extractSymbols(ast, filePath, relFile, sourceCode) {
   const symbols = [];
   const calls = [];
 
@@ -497,6 +546,12 @@ function extractSymbols(ast, filePath, relFile) {
       for (const member of nodePath.node.body.body) {
         if (member.type === "ClassMethod" && member.key?.name) {
           methods.push(member.key.name);
+          const params = (member.params || []).map(p => {
+            if (p.type === "Identifier") return p.name;
+            if (p.type === "AssignmentPattern" && p.left.type === "Identifier") return p.left.name;
+            if (p.type === "RestElement" && p.argument.type === "Identifier") return `...${p.argument.name}`;
+            return "...";
+          });
           symbols.push({
             id: `${relFile}::${className}.${member.key.name}`,
             name: `${className}.${member.key.name}`,
@@ -505,6 +560,7 @@ function extractSymbols(ast, filePath, relFile) {
             startLine: member.loc?.start.line || 0,
             endLine: member.loc?.end.line || 0,
             parent: `${relFile}::${className}`,
+            params,
           });
         }
       }
@@ -573,33 +629,39 @@ function extractSymbols(ast, filePath, relFile) {
     CallExpression(nodePath) {
       const callee = nodePath.node.callee;
       let calledName = null;
+      let objectName = null;
       if (callee.type === "Identifier") {
         calledName = callee.name;
       } else if (callee.type === "MemberExpression" && callee.property?.name) {
         calledName = callee.property.name;
+        if (callee.object.type === "Identifier") {
+          objectName = callee.object.name;
+        }
       }
       if (!calledName || calledName === "require") return;
+
+      // Extract enclosing if-conditions
+      const conditions = getEnclosingConditions(nodePath, sourceCode);
 
       // Find the enclosing function
       let scope = nodePath;
       while (scope) {
         if (scope.node.type === "FunctionDeclaration" && scope.node.id) {
-          calls.push({ caller: scope.node.id.name, callee: calledName, line: nodePath.node.loc?.start.line || 0 });
+          calls.push({ caller: scope.node.id.name, callee: calledName, objectName, conditions, line: nodePath.node.loc?.start.line || 0 });
           break;
         }
         if (scope.node.type === "ArrowFunctionExpression" || scope.node.type === "FunctionExpression") {
           if (scope.parent?.type === "VariableDeclarator" && scope.parent.id?.name) {
-            calls.push({ caller: scope.parent.id.name, callee: calledName, line: nodePath.node.loc?.start.line || 0 });
+            calls.push({ caller: scope.parent.id.name, callee: calledName, objectName, conditions, line: nodePath.node.loc?.start.line || 0 });
             break;
           }
         }
         if (scope.node.type === "ClassMethod" && scope.node.key?.name) {
-          // Find enclosing class
           let classScope = scope.parentPath;
           while (classScope && classScope.node.type !== "ClassDeclaration") classScope = classScope.parentPath;
           const className = classScope?.node?.id?.name;
           if (className) {
-            calls.push({ caller: `${className}.${scope.node.key.name}`, callee: calledName, line: nodePath.node.loc?.start.line || 0 });
+            calls.push({ caller: `${className}.${scope.node.key.name}`, callee: calledName, objectName, conditions, line: nodePath.node.loc?.start.line || 0 });
           }
           break;
         }
@@ -632,16 +694,45 @@ async function analyzeSymbols(rootDir) {
     const ast = parseFile(fullPath);
     if (!ast) continue;
 
-    const { symbols, calls } = extractSymbols(ast, fullPath, file);
+    const sourceCode = fs.readFileSync(fullPath, "utf-8");
+    const { symbols, calls } = extractSymbols(ast, fullPath, file, sourceCode);
     allSymbols.push(...symbols);
 
     // Build intra-file call edges
     const symbolNames = new Map(symbols.map(s => [s.name, s.id]));
+    // Also index method symbols by just the method name for fuzzy matching
+    const methodsByName = new Map();
+    for (const s of symbols) {
+      if (s.type === "method" && s.name.includes(".")) {
+        const methodName = s.name.split(".").pop();
+        if (!methodsByName.has(methodName)) methodsByName.set(methodName, []);
+        methodsByName.get(methodName).push(s);
+      }
+    }
     for (const call of calls) {
       const callerId = symbolNames.get(call.caller);
-      const calleeId = symbolNames.get(call.callee);
+      if (!callerId) continue;
+      // Try exact name match first
+      let calleeId = symbolNames.get(call.callee);
+      // If no direct match and it was a method call, try matching class methods
+      if (!calleeId && call.objectName) {
+        // Try ClassName.method (if objectName maps to a known class or its instance)
+        const candidates = methodsByName.get(call.callee) || [];
+        if (candidates.length === 1) {
+          calleeId = candidates[0].id;
+        } else if (candidates.length > 1) {
+          // If objectName matches a class name (e.g. Player.method), prefer that
+          const exact = candidates.find(c => c.name === `${call.objectName}.${call.callee}`);
+          if (exact) calleeId = exact.id;
+          else calleeId = candidates[0].id; // best guess
+        }
+      }
       if (callerId && calleeId && callerId !== calleeId) {
-        allEdges.push({ source: callerId, target: calleeId, type: "calls" });
+        const edge = { source: callerId, target: calleeId, type: "calls" };
+        if (call.conditions && call.conditions.length > 0) {
+          edge.conditions = call.conditions;
+        }
+        allEdges.push(edge);
       }
     }
 
@@ -684,36 +775,79 @@ async function analyzeSymbols(rootDir) {
     const fullPath = path.join(rootDir, file);
     const ast = parseFile(fullPath);
     if (!ast) continue;
-    const { calls } = extractSymbols(ast, fullPath, file);
+    const sourceCode = fs.readFileSync(fullPath, "utf-8");
+    const { calls } = extractSymbols(ast, fullPath, file, sourceCode);
     const localImportMap = {};
     for (const imp of imports) {
       localImportMap[imp.localName] = imp;
     }
     for (const call of calls) {
+      const callerSymbols = symbolByFile[file];
+      const callerId = callerSymbols?.[call.caller];
+      if (!callerId) continue;
+
+      const conds = (call.conditions && call.conditions.length > 0) ? call.conditions : undefined;
       if (localImportMap[call.callee]) {
+        // Direct imported function call: e.g. import { foo } from './bar'; foo()
         const imp = localImportMap[call.callee];
         const targetLookup = symbolByFile[imp.fromFile];
         if (!targetLookup) continue;
         const targetId = targetLookup[imp.importedName] || targetLookup[imp.localName];
-        const callerSymbols = symbolByFile[file];
-        const callerId = callerSymbols?.[call.caller];
-        if (targetId && callerId) {
-          allEdges.push({ source: callerId, target: targetId, type: "calls" });
+        if (targetId) {
+          const edge = { source: callerId, target: targetId, type: "calls" };
+          if (conds) edge.conditions = conds;
+          allEdges.push(edge);
+        }
+      } else if (call.objectName && localImportMap[call.objectName]) {
+        // Method call on an imported object: e.g. import player from './player'; player.draw()
+        const imp = localImportMap[call.objectName];
+        const targetLookup = symbolByFile[imp.fromFile];
+        if (!targetLookup) continue;
+        const targetId = targetLookup[`${imp.importedName}.${call.callee}`]
+          || targetLookup[`${imp.localName}.${call.callee}`]
+          || targetLookup[call.callee];
+        if (targetId) {
+          const edge = { source: callerId, target: targetId, type: "calls" };
+          if (conds) edge.conditions = conds;
+          allEdges.push(edge);
+        }
+      } else if (call.objectName) {
+        // Method call on a non-imported object — try to find matching methods across all files
+        for (const targetFile of Object.keys(symbolByFile)) {
+          const targetLookup = symbolByFile[targetFile];
+          for (const symName of Object.keys(targetLookup)) {
+            if (symName.endsWith(`.${call.callee}`) && symName.includes(".")) {
+              const targetId = targetLookup[symName];
+              if (targetId && targetId !== callerId) {
+                const edge = { source: callerId, target: targetId, type: "calls" };
+                if (conds) edge.conditions = conds;
+                allEdges.push(edge);
+              }
+            }
+          }
         }
       }
     }
   }
 
-  // Deduplicate edges
-  const edgeSet = new Set();
-  const dedupedEdges = [];
+  // Deduplicate edges (merge conditions from duplicate edges)
+  const edgeMap2 = new Map();
   for (const edge of allEdges) {
     const key = `${edge.source}|${edge.target}|${edge.type}`;
-    if (!edgeSet.has(key)) {
-      edgeSet.add(key);
-      dedupedEdges.push(edge);
+    if (!edgeMap2.has(key)) {
+      edgeMap2.set(key, { ...edge });
+    } else if (edge.conditions) {
+      const existing = edgeMap2.get(key);
+      if (!existing.conditions) existing.conditions = [];
+      // Add new conditions that aren't already present
+      for (const c of edge.conditions) {
+        if (!existing.conditions.some(ec => ec.condition === c.condition && ec.branch === c.branch)) {
+          existing.conditions.push(c);
+        }
+      }
     }
   }
+  const dedupedEdges = [...edgeMap2.values()];
 
   // Only include symbols that actually exist (filter out phantom import refs)
   const symbolIds = new Set(allSymbols.map(s => s.id));

@@ -16,7 +16,23 @@ async function init() {
   setupViewToggle();
   setupPathForm();
   setupKeyboardShortcuts();
+  listenForGalaxyNavigation();
   await loadSymbols();
+}
+
+function listenForGalaxyNavigation() {
+  window.addEventListener("showFileSymbols", (e) => {
+    const fileId = e.detail?.fileId;
+    if (!symbolData || !fileId) return;
+
+    // Find symbols in this file
+    const fileSymbols = symbolData.symbols.filter(s => s.file === fileId);
+    if (fileSymbols.length === 0) return;
+
+    // Pick best symbol: most cross-file calls, then exported, then first
+    const best = pickDefaultSymbol(fileSymbols, symbolData.edges) || fileSymbols[0];
+    navigateTo(best);
+  });
 }
 
 async function loadSymbols() {
@@ -27,12 +43,50 @@ async function loadSymbols() {
     initSearch(symbolData.symbols, onSymbolSelect);
     document.getElementById("stats").textContent =
       `${symbolData.symbols.length} symbols  ·  ${symbolData.edges.length} relationships  ·  ${symbolData.files.length} files`;
-    document.getElementById("graph-empty").querySelector("p").textContent =
-      "Search for a symbol to explore";
+
+    // Auto-select a default entry-point symbol
+    const defaultSym = pickDefaultSymbol(symbolData.symbols, symbolData.edges);
+    if (defaultSym) {
+      navigateTo(defaultSym);
+    } else {
+      document.getElementById("graph-empty").querySelector("p").textContent =
+        "Search for a symbol to explore";
+    }
   } catch {
     document.getElementById("graph-empty").querySelector("p").textContent =
       "No codebase analyzed yet. Use the path input to analyze one.";
   }
+}
+
+function pickDefaultSymbol(symbols, edges) {
+  const functions = symbols.filter(s => s.type === "function");
+  if (functions.length === 0) return symbols[0] || null;
+
+  // Rank by outgoing cross-file call count
+  const scores = new Map();
+  for (const fn of functions) {
+    let crossFileCalls = 0;
+    for (const edge of edges) {
+      if (edge.source === fn.id && edge.type === "calls") {
+        const target = symbols.find(s => s.id === edge.target);
+        if (target && target.file !== fn.file) crossFileCalls++;
+      }
+    }
+    scores.set(fn.id, crossFileCalls);
+  }
+
+  // Sort by cross-file calls descending
+  functions.sort((a, b) => (scores.get(b.id) || 0) - (scores.get(a.id) || 0));
+
+  // Best: most cross-file calls (if > 0)
+  if ((scores.get(functions[0].id) || 0) > 0) return functions[0];
+
+  // Fallback: first exported function
+  const exported = functions.find(s => s.exported);
+  if (exported) return exported;
+
+  // Last fallback: first function
+  return functions[0];
 }
 
 function onSymbolSelect(sym) {

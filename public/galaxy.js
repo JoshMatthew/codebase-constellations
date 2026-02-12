@@ -16,6 +16,22 @@ export function initGalaxy() {
   animate();
   loadCachedGraph();
   bindGalaxyControls();
+
+  // Galaxy file click → switch to explorer view
+  window.addEventListener("galaxyFileClick", (e) => {
+    const fileId = e.detail?.fileId;
+    if (!fileId) return;
+
+    // Switch to explorer view
+    document.getElementById("btn-explorer").click();
+
+    // Tell explorer to show this file's symbols
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("showFileSymbols", {
+        detail: { fileId },
+      }));
+    }, 50);
+  });
 }
 
 function animate() {

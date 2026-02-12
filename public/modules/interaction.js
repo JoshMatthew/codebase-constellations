@@ -125,6 +125,10 @@ function handleClick(event) {
   } else if (mesh) {
     selectedNode = mesh;
     highlightConnections(mesh.userData.nodeId, 0.03);
+    // Dispatch event so galaxy.js can navigate to explorer
+    window.dispatchEvent(new CustomEvent("galaxyFileClick", {
+      detail: { fileId: mesh.userData.nodeId },
+    }));
   } else {
     selectedNode = null;
     resetHighlights();
